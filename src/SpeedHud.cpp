@@ -61,36 +61,6 @@ HMODULE g_GameModule = nullptr;
 std::map<int, bool> g_PrevKeyStates;
 
 // ----------------------------
-// TIME CONTROL GLOBALS
-// ----------------------------
-// Time Of Day patterns and patches
-std::string g_TODTickDisablePattern = "F3 41 0F 11 95 50 01 00 00";
-std::vector<unsigned char> g_TODTickDisablePatch = { 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90, 0x90 };
-
-std::string g_TODTickRevertPattern = "90 90 90 90 90 90 90 90 90 F3 0F 10 05";
-std::vector<unsigned char> g_TODTickRevertPatch = { 0xF3, 0x41, 0x0F, 0x11, 0x95, 0x50, 0x01, 0x00, 0x00 };
-
-uintptr_t g_TODOffset = 0x150;
-uintptr_t g_TODPointer = 0x2A8EB48;
-
-// Time control state
-bool g_IsTimePassing = true;
-bool g_IsTimelapsing = false;
-std::atomic<bool> g_TimelapseThreadRunning(false);
-std::thread g_TimelapseThread;
-
-// Hotkey state (using VK codes for simplicity)
-constexpr int HOTKEY_FREEZE_TIME = VK_F1;      // F1 - Toggle freeze time
-constexpr int HOTKEY_TIMELAPSE = VK_F2;        // F2 - Toggle timelapse
-
-// ----------------------------
-// FORWARD DECLARATIONS
-// ----------------------------
-void StopTimelapse();
-void ToggleFreezeTime();
-void ToggleTimelapse();
-
-// ----------------------------
 // UTILITY FUNCTIONS
 // ----------------------------
 inline void CreateRenderTarget(IDXGISwapChain* swapChain)
@@ -157,12 +127,7 @@ void CreateDefaultConfig()
             "\n"
             "[ADDRESS]\n"
             "SpeedAddress=0x2A8FA2C\n"
-            "TODTickDisablePattern=F3 41 0F 11 95 50 01 00 00\n"
-            "TODTickDisablePatch=90 90 90 90 90 90 90 90 90\n"
-            "TODTickRevertPattern=90 90 90 90 90 90 90 90 90 F3 0F 10 05\n"
-            "TODTickRevertPatch=F3 41 0F 11 95 50 01 00 00\n"
-            "TODOffset=0x150\n"
-            "TODPointer=0x2A8EB48\n";
+            ;
     }
 }
 
@@ -198,24 +163,6 @@ void LoadConfig()
     GetPrivateProfileStringA("ADDRESS", "SpeedAddress", "0x2A8FA2C", buffer, sizeof(buffer), g_IniPath.c_str());
     g_SpeedAddress = static_cast<uintptr_t>(strtoull(buffer, nullptr, 0));
 
-    GetPrivateProfileStringA("ADDRESS", "TODTickDisablePattern", "F3 41 0F 11 95 50 01 00 00", buffer, sizeof(buffer), g_IniPath.c_str());
-    g_TODTickDisablePattern = buffer;
-
-    GetPrivateProfileStringA("ADDRESS", "TODTickDisablePatch", "90 90 90 90 90 90 90 90 90", buffer, sizeof(buffer), g_IniPath.c_str());
-    g_TODTickDisablePatch = ParseHexBytes(buffer);
-
-    GetPrivateProfileStringA("ADDRESS", "TODTickRevertPattern", "90 90 90 90 90 90 90 90 90 F3 0F 10 05", buffer, sizeof(buffer), g_IniPath.c_str());
-    g_TODTickRevertPattern = buffer;
-
-    GetPrivateProfileStringA("ADDRESS", "TODTickRevertPatch", "F3 41 0F 11 95 50 01 00 00", buffer, sizeof(buffer), g_IniPath.c_str());
-    g_TODTickRevertPatch = ParseHexBytes(buffer);
-
-    GetPrivateProfileStringA("ADDRESS", "TODOffset", "0x150", buffer, sizeof(buffer), g_IniPath.c_str());
-    g_TODOffset = static_cast<uintptr_t>(strtoull(buffer, nullptr, 0));
-
-    GetPrivateProfileStringA("ADDRESS", "TODPointer", "0x2A8EB48", buffer, sizeof(buffer), g_IniPath.c_str());
-    g_TODPointer = static_cast<uintptr_t>(strtoull(buffer, nullptr, 0));
-
 }
 
 void SaveConfig()
@@ -237,17 +184,6 @@ void SaveConfig()
 
     snprintf(buffer, sizeof(buffer), "0x%llx", (unsigned long long)g_SpeedAddress);
     WritePrivateProfileStringA("ADDRESS", "SpeedAddress", buffer, g_IniPath.c_str());
-
-    WritePrivateProfileStringA("ADDRESS", "TODTickDisablePattern", g_TODTickDisablePattern.c_str(), g_IniPath.c_str());
-    WritePrivateProfileStringA("ADDRESS", "TODTickDisablePatch", BytesToHexString(g_TODTickDisablePatch).c_str(), g_IniPath.c_str());
-    WritePrivateProfileStringA("ADDRESS", "TODTickRevertPattern", g_TODTickRevertPattern.c_str(), g_IniPath.c_str());
-    WritePrivateProfileStringA("ADDRESS", "TODTickRevertPatch", BytesToHexString(g_TODTickRevertPatch).c_str(), g_IniPath.c_str());
-
-    snprintf(buffer, sizeof(buffer), "0x%llX", (unsigned long long)g_TODOffset);
-    WritePrivateProfileStringA("ADDRESS", "TODOffset", buffer, g_IniPath.c_str());
-
-    snprintf(buffer, sizeof(buffer), "0x%llX", (unsigned long long)g_TODPointer);
-    WritePrivateProfileStringA("ADDRESS", "TODPointer", buffer, g_IniPath.c_str());
 
 }
 
@@ -364,173 +300,6 @@ void LoadImGuiFont()
 }
 
 // ----------------------------
-// TIME CONTROL FUNCTIONS
-// ----------------------------
-
-// Simple pattern scan implementation
-uintptr_t PatternScan(const char* pattern)
-{
-    // Get module info
-    MODULEINFO modInfo;
-    GetModuleInformation(GetCurrentProcess(), g_GameModule, &modInfo, sizeof(MODULEINFO));
-
-    uintptr_t base = (uintptr_t)modInfo.lpBaseOfDll;
-    uintptr_t size = modInfo.SizeOfImage;
-
-    // Parse pattern
-    std::vector<int> patternBytes;
-    std::istringstream iss(pattern);
-    std::string byteStr;
-
-    while (iss >> byteStr)
-    {
-        if (byteStr == "??" || byteStr == "?")
-            patternBytes.push_back(-1);
-        else
-            patternBytes.push_back(std::stoi(byteStr, nullptr, 16));
-    }
-
-    // Scan
-    for (uintptr_t i = 0; i < size - patternBytes.size(); i++)
-    {
-        bool found = true;
-        for (size_t j = 0; j < patternBytes.size(); j++)
-        {
-            if (patternBytes[j] != -1 && *(BYTE*)(base + i + j) != patternBytes[j])
-            {
-                found = false;
-                break;
-            }
-        }
-        if (found)
-            return base + i;
-    }
-
-    return 0;
-}
-
-bool ApplyPatch(uintptr_t address, const BYTE* patch, size_t size)
-{
-    DWORD oldProtect;
-    if (!VirtualProtect((LPVOID)address, size, PAGE_EXECUTE_READWRITE, &oldProtect))
-        return false;
-
-    memcpy((void*)address, patch, size);
-
-    VirtualProtect((LPVOID)address, size, oldProtect, &oldProtect);
-    return true;
-}
-
-void StopTODTicker()
-{
-    uintptr_t address = PatternScan(g_TODTickDisablePattern.c_str());
-    if (address)
-    {
-        ApplyPatch(address, g_TODTickDisablePatch.data(), g_TODTickDisablePatch.size());
-        g_IsTimePassing = false;
-    }
-}
-
-void ResumeTODTicker()
-{
-    uintptr_t address = PatternScan(g_TODTickRevertPattern.c_str());
-    if (address)
-    {
-        ApplyPatch(address, g_TODTickRevertPatch.data(), g_TODTickRevertPatch.size());
-        g_IsTimePassing = true;
-    }
-}
-
-float GetCurrentTOD()
-{
-    uintptr_t baseAddress = (uintptr_t)g_GameModule + g_TODPointer;
-    uintptr_t pointer = *(uintptr_t*)baseAddress;
-    if (pointer == 0)
-        return 0.0f;
-
-    uintptr_t valueAddress = pointer + g_TODOffset;
-    return *(float*)valueAddress;
-}
-
-void SetTOD(float time)
-{
-    uintptr_t baseAddress = (uintptr_t)g_GameModule + g_TODPointer;
-    uintptr_t pointer = *(uintptr_t*)baseAddress;
-    if (pointer == 0)
-        return;
-
-    uintptr_t valueAddress = pointer + g_TODOffset;
-    *(float*)valueAddress = time;
-}
-
-void TimelapseThreadFunction()
-{
-    g_TimelapseThreadRunning.store(true);
-
-    while (g_IsTimelapsing)
-    {
-        float currentTime = GetCurrentTOD();
-        float newTime = currentTime + 0.05f;  // Speed of timelapse
-        if (newTime >= 24.0f)
-            newTime -= 24.0f;
-
-        SetTOD(newTime);
-        std::this_thread::sleep_for(std::chrono::milliseconds(16));  // ~60 FPS
-    }
-
-    g_TimelapseThreadRunning.store(false);
-}
-
-void ToggleFreezeTime()
-{
-    if (g_IsTimelapsing)
-    {
-        // Stop timelapse first
-        g_IsTimelapsing = false;
-        if (g_TimelapseThread.joinable())
-            g_TimelapseThread.join();
-    }
-
-    if (g_IsTimePassing)
-        StopTODTicker();
-    else
-        ResumeTODTicker();
-}
-
-void ToggleTimelapse()
-{
-    if (!g_IsTimelapsing)
-    {
-        // Start timelapse - ensure time is running normally first
-        if (!g_IsTimePassing)
-            ResumeTODTicker();
-
-        g_IsTimelapsing = true;
-        if (g_TimelapseThread.joinable())
-            g_TimelapseThread.join();
-
-        g_TimelapseThread = std::thread(TimelapseThreadFunction);
-    }
-    else
-    {
-        // Stop timelapse - resume normal time
-        g_IsTimelapsing = false;
-        if (g_TimelapseThread.joinable())
-            g_TimelapseThread.join();
-    }
-}
-
-void StopTimelapse()
-{
-    if (g_IsTimelapsing)
-    {
-        g_IsTimelapsing = false;
-        if (g_TimelapseThread.joinable())
-            g_TimelapseThread.join();
-    }
-}
-
-// ----------------------------
 extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam);
 
 HRESULT __stdcall hkPresent(IDXGISwapChain* swapChain, UINT sync, UINT flags)
@@ -596,67 +365,67 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* swapChain, UINT sync, UINT flags)
         float speedMps = speedKmh * 0.277778f;
         g_DistanceMeters += speedMps * io.DeltaTime;
 
-        // HUD rendering
-        // Build HUD text first to know if we should render
-        std::string hudText;
-        if (g_ShowSpeed && g_ShowDistance)
+        // Analogue needle speedometer; existing Home controls position and scale.
+        ImVec2 textSize(0, 0);
+        if (g_ShowSpeed || g_ShowDistance)
         {
-            char buffer[64];
-            if (g_ShowDecimalSpeed)
-                snprintf(buffer, sizeof(buffer), "%.1f km/h\n%.0f m", speedKmh, g_DistanceMeters);
-            else
-                snprintf(buffer, sizeof(buffer), "%.0f km/h\n%.0f m", speedKmh, g_DistanceMeters);
-            hudText = buffer;
-        }
-        else if (g_ShowSpeed)
-        {
-            char buffer[32];
-            if (g_ShowDecimalSpeed)
-                snprintf(buffer, sizeof(buffer), "%.1f km/h", speedKmh);
-            else
-                snprintf(buffer, sizeof(buffer), "%.0f km/h", speedKmh);
-            hudText = buffer;
-        }
-        else if (g_ShowDistance)
-        {
-            char buffer[32];
-            snprintf(buffer, sizeof(buffer), "%.0f m", g_DistanceMeters);
-            hudText = buffer;
-        }
-
-        // Only render HUD window if there's text to show
-        ImVec2 textSize = ImVec2(0, 0);
-        if (!hudText.empty())
-        {
-            if (!g_HudPosInitialized)
-            {
-                ImGui::SetNextWindowPos(g_HudPos, ImGuiCond_Once);
-                g_HudPosInitialized = true;
-            }
-            else
-            {
-                ImGui::SetNextWindowPos(g_HudPos, ImGuiCond_Always);
-            }
-
-            ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0, 0, 0, 0));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
-            ImGui::Begin("##HUD", nullptr,
-                ImGuiWindowFlags_NoTitleBar |
-                ImGuiWindowFlags_NoResize |
-                ImGuiWindowFlags_AlwaysAutoResize |
-                ImGuiWindowFlags_NoMove |
-                ImGuiWindowFlags_NoSavedSettings |
-                ImGuiWindowFlags_NoNav |
-                ImGuiWindowFlags_NoInputs |
+            const float scale = std::max(0.1f, g_HudFontScale / 3.0f);
+            const float radius = 75.0f * scale;
+            const float bottomText = g_ShowDistance ? 22.0f * scale : 0.0f;
+            const ImVec2 extent(radius * 2.0f, radius * 2.0f + bottomText);
+            ImGui::SetNextWindowPos(g_HudPos, ImGuiCond_Always);
+            ImGui::SetNextWindowSize(extent, ImGuiCond_Always);
+            ImGui::Begin("##Speedo", nullptr,
+                ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+                ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoInputs |
                 ImGuiWindowFlags_NoBackground);
-
-            ImGui::SetWindowFontScale(g_HudFontScale);
-            ImGui::TextUnformatted(hudText.c_str());
-            textSize = ImGui::GetWindowSize();
+            const ImVec2 origin = ImGui::GetWindowPos();
+            ImDrawList* draw = ImGui::GetWindowDrawList();
+            const ImVec2 center(origin.x + radius, origin.y + radius);
+            const ImU32 face = IM_COL32(30, 33, 39, 175);
+            const ImU32 ink = IM_COL32(235, 235, 235, 245);
+            const ImU32 needle = IM_COL32(225, 65, 60, 255);
+            const float pi = 3.14159265359f;
+            const float begin = 0.7f * pi;
+            const float sweep = 1.6f * pi;
+            if (g_ShowSpeed)
+            {
+                draw->AddCircleFilled(center, radius, face, 64);
+                draw->AddCircle(center, radius - scale, ink, 64, std::max(1.0f, 1.5f * scale));
+                for (int n = 0; n <= 10; ++n)
+                {
+                    float a = begin + sweep * (float(n) / 10.0f);
+                    float ca = cosf(a), sa = sinf(a);
+                    draw->AddLine(ImVec2(center.x + ca * radius * 0.78f, center.y + sa * radius * 0.78f),
+                                  ImVec2(center.x + ca * radius * 0.9f, center.y + sa * radius * 0.9f),
+                                  ink, std::max(1.0f, scale));
+                }
+                // Speed telemetry remains the verified v44 float from SpeedHud.
+                float ratio = std::clamp(speedKmh / 150.0f, 0.0f, 1.0f);
+                float a = begin + sweep * ratio;
+                draw->AddLine(center,
+                    ImVec2(center.x + cosf(a) * radius * 0.68f, center.y + sinf(a) * radius * 0.68f),
+                    needle, std::max(2.0f, scale * 2.5f));
+                draw->AddCircleFilled(center, std::max(2.0f, 3.0f * scale), needle);
+                char speedText[32];
+                snprintf(speedText, sizeof(speedText), g_ShowDecimalSpeed ? "%.1f" : "%.0f", speedKmh);
+                ImGui::SetWindowFontScale(scale);
+                ImVec2 size = ImGui::CalcTextSize(speedText);
+                draw->AddText(ImVec2(center.x - size.x * 0.5f, center.y + radius * 0.27f), ink, speedText);
+                const char* unit = "km/h";
+                size = ImGui::CalcTextSize(unit);
+                draw->AddText(ImVec2(center.x - size.x * 0.5f, center.y + radius * 0.49f), ink, unit);
+            }
+            if (g_ShowDistance)
+            {
+                char dist[40];
+                snprintf(dist, sizeof(dist), "%.0f m", g_DistanceMeters);
+                ImGui::SetWindowFontScale(scale);
+                ImVec2 size = ImGui::CalcTextSize(dist);
+                draw->AddText(ImVec2(center.x - size.x * 0.5f, origin.y + radius * 2.0f), ink, dist);
+            }
             ImGui::End();
-            ImGui::PopStyleVar(2); // Pop WindowPadding and WindowBorderSize
-            ImGui::PopStyleColor();
+            textSize = extent;
         }
 
         // Menu toggle
@@ -735,23 +504,10 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* swapChain, UINT sync, UINT flags)
                 ImGui::TextUnformatted("Ctrl + 7 : Toggle speed format");
 
             ImGui::Spacing();
-            ImGui::SeparatorText("Time Controls");
-            ImGui::TextUnformatted("F1 : Toggle freeze time");
-            ImGui::TextUnformatted("F2 : Toggle timelapse");
-
             // Status display
             ImGui::Spacing();
             ImGui::SeparatorText("Status");
             ImGui::Text("Speed Format: %s", g_ShowDecimalSpeed ? "Decimal (25.4 km/h)" : "Integer (25 km/h)");
-            ImGui::Text("Time: %s", g_IsTimePassing ? "Running" : "Frozen");
-            if (!g_IsTimePassing)
-            {
-                float currentTime = GetCurrentTOD();
-                ImGui::Text("Current Time: %.2fh", currentTime);
-            }
-            if (g_IsTimelapsing)
-                ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.0f, 1.0f), "Timelapse: Active");
-
             ImGui::End();
             io.FontGlobalScale = oldScale;
 
@@ -781,17 +537,6 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* swapChain, UINT sync, UINT flags)
                 if (GetAsyncKeyState(VK_OEM_MINUS) & 0x8000 || GetAsyncKeyState(VK_SUBTRACT) & 0x8000)
                     g_HudFontScale = std::max(g_HudFontScale - 2.0f * io.DeltaTime, 0.1f);
             }
-        }
-
-        // Time control hotkeys (work even when menu is closed)
-        if (HandleDebouncedInput(HOTKEY_FREEZE_TIME))
-        {
-            ToggleFreezeTime();
-        }
-
-        if (HandleDebouncedInput(HOTKEY_TIMELAPSE))
-        {
-            ToggleTimelapse();
         }
 
         ImGui::Render();
@@ -853,8 +598,6 @@ BOOL APIENTRY DllMain(HMODULE hModule, DWORD reason, LPVOID)
     }
     else if (reason == DLL_PROCESS_DETACH)
     {
-        // Stop timelapse thread if running
-        StopTimelapse();
 
         // Cleanup
         if (g_ImGuiInitialized.load())
