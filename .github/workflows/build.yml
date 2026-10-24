@@ -1,0 +1,29 @@
+name: Standalone ASI x64
+on:
+  push:
+    branches: [dev]
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake -S . -B build -G "Visual Studio 17 2022" -A x64
+      - name: Build
+        run: cmake --build build --config Release --parallel
+      - name: Verify ASI
+        shell: pwsh
+        run: |
+          if (!(Test-Path "build/Release/SnowrunnerSpeedo.asi")) { throw "Missing SnowrunnerSpeedo.asi" }
+      - name: Package
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item build/Release/SnowrunnerSpeedo.asi dist/
+          Copy-Item example/speedhud.ini dist/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SnowrunnerSpeedo-x64
+          path: dist/
+          if-no-files-found: error
