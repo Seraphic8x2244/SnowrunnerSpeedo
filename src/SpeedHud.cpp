@@ -46,6 +46,10 @@ float g_DistanceMeters = 0.0f;
 bool g_ShowMenu = false;
 float g_HudFontScale = 3.0f;
 float g_MenuFontScale = 3.0f;
+// Dial angle convention: 0 degrees points right, 90 degrees points down.
+float g_DialStartDegrees = 135.0f;
+float g_DialEndDegrees = 405.0f;
+float g_MaxDisplayedSpeed = 80.0f;
 ImVec2 g_HudPos = ImVec2(10, 10);
 bool g_HudPosInitialized = false;
 
@@ -123,6 +127,9 @@ void CreateDefaultConfig()
             "ShowSpeed=1\n"
             "ShowDistance=1\n"
             "ShowDecimalSpeed=0\n"
+            "StartDegrees=135\n"
+            "EndDegrees=405\n"
+            "MaxDisplayedSpeed=80\n"
             "FontFile=\n"
             "\n"
             "[ADDRESS]\n"
@@ -157,6 +164,13 @@ void LoadConfig()
     GetPrivateProfileStringA("HUD", "ShowDecimalSpeed", "0", buffer, sizeof(buffer), g_IniPath.c_str());
     g_ShowDecimalSpeed = (buffer[0] == '1');
 
+    GetPrivateProfileStringA("HUD", "StartDegrees", "135", buffer, sizeof(buffer), g_IniPath.c_str());
+    g_DialStartDegrees = static_cast<float>(atof(buffer));
+    GetPrivateProfileStringA("HUD", "EndDegrees", "405", buffer, sizeof(buffer), g_IniPath.c_str());
+    g_DialEndDegrees = static_cast<float>(atof(buffer));
+    GetPrivateProfileStringA("HUD", "MaxDisplayedSpeed", "80", buffer, sizeof(buffer), g_IniPath.c_str());
+    g_MaxDisplayedSpeed = std::max(1.0f, static_cast<float>(atof(buffer)));
+
     GetPrivateProfileStringA("HUD", "FontFile", "", buffer, sizeof(buffer), g_IniPath.c_str());
     g_FontFile = buffer;
 
@@ -181,6 +195,13 @@ void SaveConfig()
     WritePrivateProfileStringA("HUD", "ShowSpeed", g_ShowSpeed ? "1" : "0", g_IniPath.c_str());
     WritePrivateProfileStringA("HUD", "ShowDistance", g_ShowDistance ? "1" : "0", g_IniPath.c_str());
     WritePrivateProfileStringA("HUD", "ShowDecimalSpeed", g_ShowDecimalSpeed ? "1" : "0", g_IniPath.c_str());
+
+    snprintf(buffer, sizeof(buffer), "%.2f", g_DialStartDegrees);
+    WritePrivateProfileStringA("HUD", "StartDegrees", buffer, g_IniPath.c_str());
+    snprintf(buffer, sizeof(buffer), "%.2f", g_DialEndDegrees);
+    WritePrivateProfileStringA("HUD", "EndDegrees", buffer, g_IniPath.c_str());
+    snprintf(buffer, sizeof(buffer), "%.2f", g_MaxDisplayedSpeed);
+    WritePrivateProfileStringA("HUD", "MaxDisplayedSpeed", buffer, g_IniPath.c_str());
 
     snprintf(buffer, sizeof(buffer), "0x%llx", (unsigned long long)g_SpeedAddress);
     WritePrivateProfileStringA("ADDRESS", "SpeedAddress", buffer, g_IniPath.c_str());
@@ -386,22 +407,40 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* swapChain, UINT sync, UINT flags)
             const ImU32 ink = IM_COL32(235, 235, 235, 245);
             const ImU32 needle = IM_COL32(225, 65, 60, 255);
             const float pi = 3.14159265359f;
-            const float begin = 0.7f * pi;
-            const float sweep = 1.6f * pi;
+            const float begin = g_DialStartDegrees * pi / 180.0f;
+            const float sweep = (g_DialEndDegrees - g_DialStartDegrees) * pi / 180.0f;
             if (g_ShowSpeed)
             {
                 draw->AddCircleFilled(center, radius, face, 64);
                 draw->AddCircle(center, radius - scale, ink, 64, std::max(1.0f, 1.5f * scale));
-                for (int n = 0; n <= 10; ++n)
+                // Outer crown only: 0, 20, 40, 60, 80 km/h at the default maximum.
+                // Both ticks and labels follow the configured angles and max speed.
+                const float majorStep = g_MaxDisplayedSpeed / 4.0f;
+                for (int n = 0; n <= 20; ++n)
                 {
-                    float a = begin + sweep * (float(n) / 10.0f);
-                    float ca = cosf(a), sa = sinf(a);
-                    draw->AddLine(ImVec2(center.x + ca * radius * 0.78f, center.y + sa * radius * 0.78f),
-                                  ImVec2(center.x + ca * radius * 0.9f, center.y + sa * radius * 0.9f),
-                                  ink, std::max(1.0f, scale));
+                    const float fraction = float(n) / 20.0f;
+                    const float a = begin + sweep * fraction;
+                    const float ca = cosf(a), sa = sinf(a);
+                    const bool major = n % 5 == 0;
+                    const float inner = major ? 0.76f : 0.83f;
+                    draw->AddLine(
+                        ImVec2(center.x + ca * radius * inner, center.y + sa * radius * inner),
+                        ImVec2(center.x + ca * radius * 0.93f, center.y + sa * radius * 0.93f),
+                        ink, std::max(1.0f, scale * (major ? 2.0f : 1.0f)));
+                    if (major)
+                    {
+                        char label[24];
+                        snprintf(label, sizeof(label), "%.0f", majorStep * float(n / 5));
+                        const ImVec2 labelSize = ImGui::CalcTextSize(label);
+                        const float labelRadius = radius * 0.62f;
+                        draw->AddText(
+                            ImVec2(center.x + ca * labelRadius - labelSize.x * 0.5f,
+                                   center.y + sa * labelRadius - labelSize.y * 0.5f),
+                            ink, label);
+                    }
                 }
                 // Speed telemetry remains the verified v44 float from SpeedHud.
-                float ratio = std::clamp(speedKmh / 150.0f, 0.0f, 1.0f);
+                float ratio = std::clamp(speedKmh / g_MaxDisplayedSpeed, 0.0f, 1.0f);
                 float a = begin + sweep * ratio;
                 draw->AddLine(center,
                     ImVec2(center.x + cosf(a) * radius * 0.68f, center.y + sinf(a) * radius * 0.68f),
