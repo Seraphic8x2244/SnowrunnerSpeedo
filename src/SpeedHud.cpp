@@ -1,4 +1,5 @@
 #include <Windows.h>
+#include <algorithm>
 #include <thread>
 #include <d3d11.h>
 #include <dxgi.h>
@@ -110,8 +111,8 @@ inline void CreateRenderTarget(IDXGISwapChain* swapChain)
 
 inline void ClampHudPosition(ImVec2& pos, const ImVec2& textSize, const ImVec2& screenSize)
 {
-    pos.x = max(0.0f, min(pos.x, screenSize.x - textSize.x));
-    pos.y = max(0.0f, min(pos.y, screenSize.y - textSize.y));
+    pos.x = std::max(0.0f, std::min(pos.x, screenSize.x - textSize.x));
+    pos.y = std::max(0.0f, std::min(pos.y, screenSize.y - textSize.y));
 }
 
 std::vector<BYTE> ParseHexBytes(const std::string& hexStr)
@@ -775,10 +776,10 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* swapChain, UINT sync, UINT flags)
 
                 // Smooth scaling like arrow keys
                 if (GetAsyncKeyState(VK_OEM_PLUS) & 0x8000 || GetAsyncKeyState(VK_ADD) & 0x8000)
-                    g_HudFontScale = min(g_HudFontScale + 2.0f * io.DeltaTime, 10.0f);
+                    g_HudFontScale = std::min(g_HudFontScale + 2.0f * io.DeltaTime, 10.0f);
 
                 if (GetAsyncKeyState(VK_OEM_MINUS) & 0x8000 || GetAsyncKeyState(VK_SUBTRACT) & 0x8000)
-                    g_HudFontScale = max(g_HudFontScale - 2.0f * io.DeltaTime, 0.1f);
+                    g_HudFontScale = std::max(g_HudFontScale - 2.0f * io.DeltaTime, 0.1f);
             }
         }
 
