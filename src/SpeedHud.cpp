@@ -1,3 +1,9 @@
+// Based on SpeedHud by crzknya (https://github.com/crzknya/SpeedHud)
+// and the rodigh/SpeedHud fork (https://github.com/rodigh/SpeedHud).
+// Adapted for the standalone SnowrunnerSpeedo analogue gauge.
+// Upstream repositories do not declare a software licence; attribution is not
+// a substitute for permission to redistribute. Clarify rights before release.
+
 #include <Windows.h>
 #include <algorithm>
 #include <thread>
@@ -357,7 +363,7 @@ HRESULT __stdcall hkPresent(IDXGISwapChain* swapChain, UINT sync, UINT flags)
             if (pos != std::string::npos)
             {
                 g_DllDirectory = path.substr(0, pos);
-                g_IniPath = g_DllDirectory + "\\speedhud.ini";
+                g_IniPath = g_DllDirectory + "\\SnowrunnerSpeedo.ini";
             }
 
             // Load config first to get font file setting
