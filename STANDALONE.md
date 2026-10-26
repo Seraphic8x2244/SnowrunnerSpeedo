@@ -7,12 +7,12 @@ Experimental standalone ASI based on [rodigh/SpeedHud](https://github.com/rodigh
 1. Close SnowRunner.
 2. Move existing `SnowLoader.asi` and `SpeedHud.asi` out of the game executable folder to avoid conflicting HUD hooks. Keep `dinput8.dll` (Ultimate ASI Loader).
 3. Download the `SnowrunnerSpeedo-x64` artifact from the newest successful **Standalone ASI x64** Actions run on `dev`.
-4. Copy `SnowrunnerSpeedo.asi` and `speedhud.ini` into the folder containing `SnowRunner.exe`.
+4. Copy `SnowrunnerSpeedo.asi` and `SnowrunnerSpeedo.ini` into the folder containing `SnowRunner.exe`.
 5. Launch the game. The basic analogue gauge should appear with optional distance text.
 
 ## INI test
 
-Edit `speedhud.ini` while the game is closed, then restart:
+Edit `SnowrunnerSpeedo.ini` while the game is closed, then restart:
 
 ```ini
 [HUD]
@@ -40,3 +40,9 @@ The Home-key menu remains available. Unrelated time-control functionality has be
 The separate [SnowLoader fork](https://github.com/Seraphic8x2244/SnowLoader/tree/dev) continues to preserve the full SnowLoader source and its successful Windows build workflow. The `SnowLoader` branch here is **not yet a self-contained copy of that separate repository**.
 
 No in-game test has been performed for this custom ASI.
+
+## Origin and licensing
+
+This mod derives its core hooking, input, speed-reading and configuration implementation from [crzknya/SpeedHud](https://github.com/crzknya/SpeedHud) through the [rodigh/SpeedHud](https://github.com/rodigh/SpeedHud) fork. The analogue gauge and dial configuration were adapted for SnowrunnerSpeedo. **Neither upstream repository currently declares a licence.** Source being public does not automatically grant redistribution rights. Attribution is included, but obtain explicit permission or replace the imported implementation before public distribution.
+
+The mod uses its own `SnowrunnerSpeedo.ini` beside `SnowrunnerSpeedo.asi`; it does **not** read or write `speedhud.ini`. Existing original SpeedHud settings are not migrated or changed.
