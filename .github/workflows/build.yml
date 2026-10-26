@@ -21,7 +21,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item build/Release/SnowrunnerSpeedo.asi dist/
-          Copy-Item example/speedhud.ini dist/
+          Copy-Item example/SnowrunnerSpeedo.ini dist/
       - uses: actions/upload-artifact@v4
         with:
           name: SnowrunnerSpeedo-x64
